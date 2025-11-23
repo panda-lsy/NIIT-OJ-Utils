@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "NIIT-OJ-Utils (NIIT OJ 实用工具)",
+  "version": "1.1",
+  "description": "NIIT OJ 增强工具：题目导航(上一题/下一题)、新窗口打开题目讨论等",
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://oj.niit.com.cn/problem/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
