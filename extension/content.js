@@ -142,9 +142,103 @@
         log('Discussion tab listener attached');
     }
 
+    // 注入拦截脚本 (只运行一次)
+    let scriptInjected = false;
+    function injectScript() {
+        if (scriptInjected) return;
+        try {
+            const script = document.createElement('script');
+            script.src = chrome.runtime.getURL('inject.js');
+            script.onload = function() {
+                this.remove();
+            };
+            (document.head || document.documentElement).appendChild(script);
+            scriptInjected = true;
+            log('Injected interception script.');
+        } catch (e) {
+            console.error('Failed to inject script:', e);
+        }
+    }
+
+    // 修复提交详情跳转 (只运行一次)
+    let redirectFixed = false;
+    function fixSubmissionRedirect() {
+        if (redirectFixed) return;
+        document.addEventListener('click', function(e) {
+            // 检查点击的是否是提交状态标签
+            const target = e.target.closest('.submission-status');
+            if (target) {
+                const lastId = window.sessionStorage.getItem('niit_oj_last_submission_id');
+                log('Click detected on submission status. Last ID: ' + lastId);
+                
+                if (lastId) {
+                    log('Redirecting to submission detail: ' + lastId);
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation(); // 确保阻止其他监听器
+                    window.location.href = `/submission-detail/${lastId}`;
+                } else {
+                    log('No submission ID found in sessionStorage.');
+                }
+            }
+        }, true); // 捕获阶段
+        redirectFixed = true;
+        log('Submission redirect fix applied.');
+    }
+
+    // 修复提交列表点击
+    let listClickFixed = false;
+    function fixSubmissionListClick() {
+        if (listClickFixed) return;
+        
+        document.addEventListener('click', function(e) {
+            // 检查是否在提交列表表格中 (包括主体和固定列)
+            const tableWrapper = e.target.closest('#pane-mySubmission .vxe-table--body-wrapper, #pane-mySubmission .vxe-table--fixed-left-wrapper, #pane-mySubmission .vxe-table--fixed-right-wrapper');
+            
+            if (!tableWrapper) return;
+
+            const tr = e.target.closest('tr');
+            if (!tr) return;
+
+            // 获取行号 (在 tbody 中的索引)
+            const rowIndex = Array.from(tr.parentNode.children).indexOf(tr);
+            
+            // 获取存储的列表
+            const listStr = window.sessionStorage.getItem('niit_oj_submission_list');
+            if (listStr) {
+                try {
+                    const list = JSON.parse(listStr);
+                    if (list && list[rowIndex]) {
+                        const item = list[rowIndex];
+                        const subId = item.id || item.submitId || item.submissionId;
+                        
+                        if (subId) {
+                            log('List click detected. Row: ' + rowIndex + ', ID: ' + subId);
+                            // 只有当点击的是可能有交互的元素时才拦截? 
+                            // 或者直接拦截所有行内点击，只要它看起来像是一个链接或按钮
+                            // 用户反馈的是点击按钮报错，所以我们拦截它
+                            e.preventDefault();
+                            e.stopPropagation();
+                            e.stopImmediatePropagation();
+                            window.location.href = `/submission-detail/${subId}`;
+                        }
+                    }
+                } catch (err) {
+                    console.error(err);
+                }
+            }
+        }, true);
+        
+        listClickFixed = true;
+        log('Submission list click fix applied.');
+    }
+
     function mainLoop() {
         init();
         handleDiscussionTab();
+        injectScript();
+        fixSubmissionRedirect();
+        fixSubmissionListClick();
     }
 
     // 启动循环检测 (处理 SPA 路由切换)

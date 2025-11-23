@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NIIT-OJ-Utils (NIIT OJ 实用工具)
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  NIIT OJ 增强工具：题目导航(上一题/下一题)、新窗口打开题目讨论等
+// @version      1.2
+// @description  NIIT OJ 增强工具：题目导航(上一题/下一题)、新窗口打开题目讨论、修复提交详情跳转
 // @author       GitHub Copilot
 // @match        https://oj.niit.com.cn/problem/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=niit.com.cn
@@ -145,9 +145,132 @@
         log('讨论区 Tab 监听已添加');
     }
 
+    // 注入拦截代码
+    function injectInterception() {
+        if (document.getElementById('niit-oj-interceptor')) return;
+        
+        const script = document.createElement('script');
+        script.id = 'niit-oj-interceptor';
+        script.textContent = `
+        (function() {
+            const XHR = XMLHttpRequest.prototype;
+            const open = XHR.open;
+            const send = XHR.send;
+
+            XHR.open = function(method, url) {
+                this._url = url;
+                return open.apply(this, arguments);
+            };
+
+            XHR.send = function(postData) {
+                this.addEventListener('load', function() {
+                    // 拦截提交
+                    if (this._url && (this._url.includes('/submit') || this._url.includes('judge'))) {
+                        try {
+                            const res = JSON.parse(this.responseText);
+                            let subId = null;
+                            if (res.data) {
+                                if (typeof res.data === 'object') {
+                                    subId = res.data.id || res.data.submissionId || res.data.submission_id || res.data.submitId;
+                                } else if (typeof res.data === 'string' || typeof res.data === 'number') {
+                                    subId = res.data;
+                                }
+                            }
+                            if (subId) {
+                                window.sessionStorage.setItem('niit_oj_last_submission_id', subId);
+                                console.log('[NIIT-OJ-Utils] Captured Submission ID:', subId);
+                            }
+                        } catch (e) {}
+                    }
+                    // 拦截列表
+                    if (this._url && (this._url.includes('submission') || this._url.includes('record') || this._url.includes('list'))) {
+                        try {
+                            const res = JSON.parse(this.responseText);
+                            let list = [];
+                            if (res.data && Array.isArray(res.data)) {
+                                list = res.data;
+                            } else if (res.data && res.data.records && Array.isArray(res.data.records)) {
+                                list = res.data.records;
+                            } else if (res.data && res.data.data && Array.isArray(res.data.data)) {
+                                list = res.data.data;
+                            }
+                            if (list.length > 0) {
+                                const first = list[0];
+                                if ((first.id || first.submitId) && (first.status !== undefined || first.pid !== undefined || first.displayPid !== undefined)) {
+                                     window.sessionStorage.setItem('niit_oj_submission_list', JSON.stringify(list));
+                                     console.log('[NIIT-OJ-Utils] Captured Submission List:', list.length);
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                });
+                return send.apply(this, arguments);
+            };
+        })();
+        `;
+        (document.head || document.documentElement).appendChild(script);
+        log('拦截脚本已注入');
+    }
+
+    // 修复提交详情跳转
+    let redirectFixed = false;
+    function fixSubmissionRedirect() {
+        if (redirectFixed) return;
+        document.addEventListener('click', function(e) {
+            const target = e.target.closest('.submission-status');
+            if (target) {
+                const lastId = window.sessionStorage.getItem('niit_oj_last_submission_id');
+                log('点击了状态标签，当前 ID: ' + lastId);
+                if (lastId) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    window.location.href = '/submission-detail/' + lastId;
+                }
+            }
+        }, true);
+        redirectFixed = true;
+        log('提交跳转修复已应用');
+    }
+
+    // 修复提交列表点击
+    let listClickFixed = false;
+    function fixSubmissionListClick() {
+        if (listClickFixed) return;
+        document.addEventListener('click', function(e) {
+            const tableWrapper = e.target.closest('#pane-mySubmission .vxe-table--body-wrapper, #pane-mySubmission .vxe-table--fixed-left-wrapper, #pane-mySubmission .vxe-table--fixed-right-wrapper');
+            if (!tableWrapper) return;
+            const tr = e.target.closest('tr');
+            if (!tr) return;
+            const rowIndex = Array.from(tr.parentNode.children).indexOf(tr);
+            const listStr = window.sessionStorage.getItem('niit_oj_submission_list');
+            if (listStr) {
+                try {
+                    const list = JSON.parse(listStr);
+                    if (list && list[rowIndex]) {
+                        const item = list[rowIndex];
+                        const subId = item.id || item.submitId || item.submissionId;
+                        if (subId) {
+                            log('列表点击检测. Row: ' + rowIndex + ', ID: ' + subId);
+                            e.preventDefault();
+                            e.stopPropagation();
+                            e.stopImmediatePropagation();
+                            window.location.href = '/submission-detail/' + subId;
+                        }
+                    }
+                } catch (err) {}
+            }
+        }, true);
+        listClickFixed = true;
+        log('列表点击修复已应用');
+    }
+
     function mainLoop() {
         addNavButtons();
         handleDiscussionTab();
+        injectInterception();
+        fixSubmissionRedirect();
+        fixSubmissionListClick();
     }
 
     // 启动轮询
