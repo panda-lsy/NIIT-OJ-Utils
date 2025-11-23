@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NIIT-OJ-Utils (NIIT OJ 实用工具)
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.2.1
 // @description  NIIT OJ 增强工具：题目导航(上一题/下一题)、新窗口打开题目讨论、修复提交详情跳转
 // @author       GitHub Copilot
 // @match        https://oj.niit.com.cn/problem/*
@@ -225,7 +225,7 @@
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation();
-                    window.location.href = '/submission-detail/' + lastId;
+                    window.open('/submission-detail/' + lastId, '_blank');
                 }
             }
         }, true);
@@ -255,7 +255,7 @@
                             e.preventDefault();
                             e.stopPropagation();
                             e.stopImmediatePropagation();
-                            window.location.href = '/submission-detail/' + subId;
+                            window.open('/submission-detail/' + subId, '_blank');
                         }
                     }
                 } catch (err) {}

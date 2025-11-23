@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NIIT-OJ-Utils (NIIT OJ 实用工具)",
-  "version": "1.2",
+  "version": "1.2.1",
   "description": "NIIT OJ 增强工具：题目导航、新窗口打开讨论、修复提交详情跳转(submission-detail)、修复历史提交列表跳转",
   "icons": {
     "16": "icon.png",

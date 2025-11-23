@@ -176,7 +176,7 @@
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation(); // 确保阻止其他监听器
-                    window.location.href = `/submission-detail/${lastId}`;
+                    window.open(`/submission-detail/${lastId}`, '_blank');
                 } else {
                     log('No submission ID found in sessionStorage.');
                 }
@@ -220,7 +220,7 @@
                             e.preventDefault();
                             e.stopPropagation();
                             e.stopImmediatePropagation();
-                            window.location.href = `/submission-detail/${subId}`;
+                            window.open(`/submission-detail/${subId}`, '_blank');
                         }
                     }
                 } catch (err) {
