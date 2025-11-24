@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NIIT-OJ-Utils (NIIT OJ 实用工具)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.1
+// @version      1.3.0
 // @description  NIIT OJ 增强工具：题目导航(上一题/下一题)、新窗口打开题目讨论、修复提交详情跳转
 // @author       GitHub Copilot
 // @match        https://oj.niit.com.cn/problem/*
@@ -265,12 +265,84 @@
         log('列表点击修复已应用');
     }
 
+    // 修复图片显示问题
+    function fixImages() {
+        const images = document.querySelectorAll('img');
+        images.forEach(img => {
+            const rawSrc = img.getAttribute('src');
+            if (!rawSrc) return;
+
+            // Only target the specific broken pattern
+            if (rawSrc.includes('/api/public/img/')) {
+                // If we haven't touched this image yet
+                if (img.getAttribute('data-fixed-attempt') === null) {
+                    img.setAttribute('data-fixed-attempt', 'true'); // Mark as processing
+
+                    // Extract the filename and ID
+                    const filename = rawSrc.split('/').pop();
+                    const fileId = filename.split('.')[0];
+                    
+                    // Define candidate paths
+                    const candidates = [
+                        `/public/img/${filename}`,
+                        `/img/${filename}`,
+                        `/api/img/${filename}`,
+                        `/upload/${filename}`,
+                        `/assets/img/${filename}`,
+                        `/static/img/${filename}`,
+                        `/file/${filename}`,
+                        `/files/${filename}`,
+                        `/image/${filename}`,
+                        `/images/${filename}`,
+                        `/api/file/${filename}`,
+                        `/api/file/${fileId}`, // Try without extension
+                        `/api/file/image/${fileId}`,
+                        `/api/file/download/${fileId}`,
+                        `https://oj.niit.com.cn/public/img/${filename}`,
+                        `https://oj.niit.com.cn/api/public/img/${filename}`
+                    ];
+
+                    let attemptIndex = 0;
+
+                    const tryNext = () => {
+                        if (attemptIndex >= candidates.length) {
+                            log(`All image load attempts failed for ${filename}`);
+                            return;
+                        }
+                        const nextSrc = candidates[attemptIndex++];
+                        log(`Trying image path: ${nextSrc}`);
+                        
+                        // Use fetch to check status code
+                        fetch(nextSrc, { method: 'HEAD' })
+                            .then(response => {
+                                if (response.ok) {
+                                    log(`Image fix success (HTTP ${response.status}): ${nextSrc}`);
+                                    img.src = nextSrc;
+                                } else {
+                                    log(`Failed ${nextSrc}: HTTP ${response.status}`);
+                                    tryNext();
+                                }
+                            })
+                            .catch(err => {
+                                log(`Failed ${nextSrc}: ${err.message}`);
+                                tryNext();
+                            });
+                    };
+
+                    // Start the chain
+                    tryNext();
+                }
+            }
+        });
+    }
+
     function mainLoop() {
         addNavButtons();
         handleDiscussionTab();
         injectInterception();
         fixSubmissionRedirect();
         fixSubmissionListClick();
+        fixImages();
     }
 
     // 启动轮询
