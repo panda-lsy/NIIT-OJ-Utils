@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NIIT-OJ-Utils (NIIT OJ 实用工具)
 // @namespace    http://tampermonkey.net/
-// @version      1.3.0
+// @version      1.4.0
 // @description  NIIT OJ 增强工具：题目导航(上一题/下一题)、新窗口打开题目讨论、修复提交详情跳转
 // @author       GitHub Copilot
 // @match        https://oj.niit.com.cn/problem/*

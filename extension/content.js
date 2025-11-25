@@ -441,10 +441,17 @@
                 return;
             }
 
-            // 简单过滤状态标签
-            if (['Accepted', 'Wrong Answer', 'Time Limit Exceeded', 'Memory Limit Exceeded', 'Runtime Error', 'Compile Error'].includes(tagName)) {
+            // 简单过滤状态标签和功能按钮
+            // 使用正则匹配 "填充用例" 开头的标签
+            if (['Accepted', 'Wrong Answer', 'Time Limit Exceeded', 'Memory Limit Exceeded', 'Runtime Error', 'Compile Error', '在线自测', '运行自测'].includes(tagName) || tagName.startsWith('填充用例')) {
                 tag.setAttribute('data-oj-tag-processed', 'true');
                 tag.setAttribute('data-oj-tag-name', tagName);
+                // 确保没有 tooltip 和 cursor 样式
+                tag.title = '';
+                tag.style.cursor = '';
+                tag.onmouseover = null;
+                tag.onmouseout = null;
+                tag.onclick = null;
                 return;
             }
 

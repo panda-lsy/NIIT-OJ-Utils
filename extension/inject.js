@@ -277,7 +277,8 @@
         const mode = cm.getOption('mode');
         const isPython = mode === 'python' || (typeof mode === 'object' && mode.name === 'python');
 
-        if (isPython || true) { // 对所有语言生效，或者只针对 Python
+        // 修复：只在未配置时应用，避免重复设置导致选择丢失
+        if (!cm._hasConfiguredOptions && (isPython || true)) { // 对所有语言生效，或者只针对 Python
             // 强制 Tab 为 4 个空格
             cm.setOption('indentUnit', 4);
             cm.setOption('tabSize', 4);
@@ -317,9 +318,384 @@
             });
             
             cm.setOption('extraKeys', extraKeys);
+            cm._hasConfiguredOptions = true;
+        }
+        
+        // 4. 恢复 IDE 设置 (Theme, FontSize, TabLength)
+        if (!cm._hasRestoredSettings) {
+            try {
+                const savedSettings = JSON.parse(localStorage.getItem('niit_oj_ide_settings') || '{}');
+                if (savedSettings.theme) {
+                    // 转换主题名
+                    let cmTheme = savedSettings.theme.toLowerCase().trim().replace(/\s+/g, '-');
+                    if (cmTheme.includes('solarized')) cmTheme = 'solarized';
+                    cm.setOption('theme', cmTheme);
+                }
+                // Font Size 需要操作 DOM，这里暂时只处理 CodeMirror 选项
+                // Tab Length
+                if (savedSettings.tabLength) {
+                    const tabLen = parseInt(savedSettings.tabLength);
+                    cm.setOption('indentUnit', tabLen);
+                    cm.setOption('tabSize', tabLen);
+                }
+                // 字体大小通常是外部 CSS 控制，或者 .CodeMirror 的 style
+                if (savedSettings.fontSize) {
+                    cmElement.style.fontSize = savedSettings.fontSize;
+                    cm.refresh();
+                }
+                cm._hasRestoredSettings = true;
+                console.log('[NIIT-OJ-Utils] IDE settings restored:', savedSettings);
+            } catch (e) {
+                console.error('Failed to restore IDE settings', e);
+            }
+        }
+    }
+
+    // 注入设置保存按钮
+    function injectSettingsSaveBtn() {
+        // 查找设置弹窗
+        const popovers = document.querySelectorAll('.el-popover');
+        let settingPopover = null;
+        
+        popovers.forEach(p => {
+            if (p.querySelector('.setting-title') && p.innerText.includes('设置')) {
+                settingPopover = p;
+            }
+        });
+
+        if (!settingPopover) return;
+
+        // 检查是否已注入
+        if (settingPopover.querySelector('#niit-oj-save-settings-btn')) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'niit-oj-save-settings-btn';
+        btn.innerText = '保存设置到本地';
+        btn.className = 'el-button el-button--primary el-button--mini';
+        btn.style.cssText = 'width: 100%; margin-top: 10px;';
+        
+        btn.onclick = function() {
+            try {
+                // 直接从 CodeMirror 实例读取当前生效的配置
+                const cmElement = document.querySelector('.CodeMirror');
+                if (!cmElement || !cmElement.CodeMirror) {
+                    alert('未找到编辑器实例');
+                    return;
+                }
+                const cm = cmElement.CodeMirror;
+
+                // 1. Theme
+                const theme = cm.getOption('theme');
+
+                // 2. Tab Length
+                const tabLength = cm.getOption('indentUnit');
+
+                // 3. Font Size
+                // 优先从弹窗输入框读取，因为这是用户的意图，且 DOM 可能尚未更新
+                let fontSize = '';
+                const items = settingPopover.querySelectorAll('.setting-item');
+                items.forEach(item => {
+                    const nameEl = item.querySelector('.setting-item-name');
+                    if (nameEl && nameEl.innerText.includes('字体')) {
+                        const input = item.querySelector('input');
+                        if (input) fontSize = input.value;
+                    }
+                });
+
+                // 如果弹窗里没读到，再尝试从 DOM 读
+                if (!fontSize) {
+                    fontSize = cmElement.style.fontSize;
+                }
+                
+                // 规范化 fontSize
+                if (fontSize && !fontSize.endsWith('px') && !isNaN(parseInt(fontSize))) {
+                    fontSize = fontSize + 'px';
+                }
+
+                const settings = {
+                    theme: theme,
+                    fontSize: fontSize,
+                    tabLength: tabLength
+                };
+
+                localStorage.setItem('niit_oj_ide_settings', JSON.stringify(settings));
+                alert(`设置已保存！\n主题: ${theme}\n字体: ${fontSize}\n缩进: ${tabLength}\n\n请刷新页面以使设置生效。`);
+
+            } catch (e) {
+                console.error('Failed to save settings', e);
+                alert('保存失败，请查看控制台');
+            }
+        };
+
+        settingPopover.appendChild(btn);
+    }
+
+    // 修复 IDE 选择问题 (Hybrid Mode: Native Selection -> CM Sync)
+    function fixIDESelection() {
+        // 1. CSS Fix
+        if (!document.getElementById('niit-oj-ide-fix-style')) {
+            const style = document.createElement('style');
+            style.id = 'niit-oj-ide-fix-style';
+            style.textContent = `
+                .CodeMirror {
+                    user-select: text !important;
+                    -webkit-user-select: text !important;
+                }
+                /* 当处于原生选择模式时(鼠标按下拖动期间)，隐藏 CM 的选区和光标，避免视觉冲突 */
+                .CodeMirror.using-native-selection .CodeMirror-selected,
+                .CodeMirror.using-native-selection .CodeMirror-selectedtext {
+                    background: transparent !important;
+                }
+                .CodeMirror.using-native-selection .CodeMirror-cursor {
+                    display: none !important;
+                    border-left-color: transparent !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        // 2. JS Logic
+        const cmElement = document.querySelector('.CodeMirror');
+        if (!cmElement || !cmElement.CodeMirror) return;
+        const cm = cmElement.CodeMirror;
+
+        if (cm._hasSelectionFix) return;
+
+        // 禁用 CM 拖拽，防止冲突
+        cm.setOption('dragDrop', false);
+
+        const enableNativeMode = () => {
+            cmElement.classList.add('using-native-selection');
+        };
+
+        const disableNativeMode = () => {
+            cmElement.classList.remove('using-native-selection');
+        };
+
+        // 核心同步逻辑：将原生选区状态同步给 CodeMirror，然后切换回 CodeMirror 接管
+        const syncAndSwitchToCM = () => {
+            const sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) {
+                disableNativeMode();
+                return;
+            }
+            
+            const range = sel.getRangeAt(0);
+            // 确保选区在编辑器内
+            if (!cmElement.contains(range.commonAncestorContainer)) {
+                disableNativeMode();
+                return;
+            }
+
+            try {
+                const startRange = range.cloneRange();
+                startRange.collapse(true);
+                const startRect = startRange.getClientRects()[0];
+
+                const endRange = range.cloneRange();
+                endRange.collapse(false);
+                const endRect = endRange.getClientRects()[0];
+
+                if (startRect && endRect) {
+                    const startPos = cm.coordsChar({ left: startRect.left, top: startRect.top }, 'window');
+                    const endPos = cm.coordsChar({ left: endRect.left, top: endRect.top }, 'window');
+                    
+                    // 同步到 CM
+                    if (range.collapsed) {
+                        cm.setCursor(startPos);
+                    } else {
+                        cm.setSelection(startPos, endPos, { scroll: false, origin: 'niit-oj-sync' });
+                    }
+                }
+            } catch (e) {
+                console.error('Sync failed', e);
+            }
+
+            // 切换回 CM 模式：移除 CSS 类，让 CM 的光标和选区显示出来
+            disableNativeMode();
+            
+            // 清除原生选区，避免视觉上出现两个选区
+            sel.removeAllRanges();
+            
+            // 重新聚焦 CM，确保键盘事件能被 hidden textarea 捕获
+            cm.focus();
+            if (cm.getInputField) cm.getInputField().focus();
+        };
+
+        // Mousedown: 开始原生选择模式
+        cmElement.addEventListener('mousedown', (e) => {
+            // 右键或滚动条不处理
+            if (e.button === 2 || 
+                e.target.closest('.CodeMirror-scrollbar-filler') || 
+                e.target.closest('.CodeMirror-gutter')) return;
+
+            enableNativeMode();
+            
+            // 关键修复：阻止冒泡，防止 CodeMirror 接收事件并调用 preventDefault()
+            // 这样浏览器才能立即响应 mousedown 并开始原生选区，解决"需要点击两次"的问题
+            e.stopPropagation();
+
+            // 确保编辑器获得焦点
+            if (!cm.hasFocus()) {
+                cm.focus();
+            }
+        }, true); // Capture phase
+
+        // Mousemove: 拦截拖拽，防止 CM 在拖动过程中更新选区导致跳动
+        cmElement.addEventListener('mousemove', (e) => {
+            if (e.buttons === 1 && cmElement.classList.contains('using-native-selection')) {
+                e.stopPropagation();
+            }
+        }, true); // Capture phase
+
+        // Mouseup: 结束选择，同步数据并交还控制权
+        document.addEventListener('mouseup', () => {
+            if (cmElement.classList.contains('using-native-selection')) {
+                syncAndSwitchToCM();
+            }
+        });
+
+        // Dragstart: 阻止原生拖拽，防止文本被意外删除
+        cmElement.addEventListener('dragstart', (e) => {
+            e.preventDefault();
+        });
+
+        // 5. 优化剪贴板处理：使用键盘拦截 + Clipboard API
+        // 解释：原生 copy/cut/paste 事件在不同浏览器/焦点状态下不稳定，改用 keydown 拦截并使用 navigator.clipboard
+        const clipboardKeyHandler = async (e) => {
+            const isAccel = e.ctrlKey || e.metaKey;
+            if (!isAccel) return;
+
+            const key = (e.key || '').toLowerCase();
+            if (!['c', 'x', 'v'].includes(key)) return;
+
+            // 只在编辑器激活/相关时拦截
+            const activeInCm = cmElement.contains(document.activeElement) || cmElement.classList.contains('using-native-selection');
+            if (!activeInCm) return;
+
+            // 立即阻止默认行为和冒泡，防止浏览器处理和重复触发
+            e.preventDefault();
+            e.stopPropagation();
+
+            // 如果当前处于原生选区模式，先同步选区到 CM
+            if (cmElement.classList.contains('using-native-selection') && typeof syncAndSwitchToCM === 'function') {
+                try { syncAndSwitchToCM(); } catch (e) {}
+            }
+
+            try {
+                if (key === 'c') {
+                    if (cm.somethingSelected()) {
+                        const text = cm.getSelection();
+                        try {
+                            await navigator.clipboard.writeText(text);
+                        } catch (err) {
+                            // 退回到 execCommand 方案
+                            const ta = document.createElement('textarea');
+                            ta.value = text;
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand('copy');
+                            ta.remove();
+                        }
+                    }
+                } else if (key === 'x') {
+                    if (cm.somethingSelected()) {
+                        const text = cm.getSelection();
+                        try {
+                            await navigator.clipboard.writeText(text);
+                        } catch (err) {
+                            const ta = document.createElement('textarea');
+                            ta.value = text;
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand('copy');
+                            ta.remove();
+                        }
+                        // 删除选区内容
+                        cm.replaceSelection('');
+                    }
+                } else if (key === 'v') {
+                    let text = '';
+                    try {
+                        text = await navigator.clipboard.readText();
+                    } catch (err) {
+                        console.warn('[NIIT-OJ-Utils] Clipboard read failed', err);
+                    }
+                    if (text) {
+                        cm.replaceSelection(text);
+                    }
+                }
+            } catch (err) {
+                console.error('[NIIT-OJ-Utils] clipboardKeyHandler error', err);
+            }
+        };
+
+        // 绑定到编辑器元素 (移除 document 绑定以避免重复)
+        cmElement.addEventListener('keydown', clipboardKeyHandler);
+
+        cm._hasSelectionFix = true;
+        console.log('[NIIT-OJ-Utils] IDE Selection Sync applied (Hybrid Mode + Clipboard Key Handling)');
+    }
+
+    // 同步设置到 UI 面板 (当弹窗显示时)
+    function syncSettingsUI() {
+        const popovers = document.querySelectorAll('.el-popover');
+        let settingPopover = null;
+        
+        popovers.forEach(p => {
+            if (p.querySelector('.setting-title') && p.innerText.includes('设置')) {
+                settingPopover = p;
+            }
+        });
+
+        if (!settingPopover) return;
+
+        // 检查可见性 (display != none 且在 DOM 树中)
+        const isVisible = settingPopover.style.display !== 'none' && settingPopover.offsetParent !== null;
+
+        if (isVisible) {
+            if (!settingPopover._hasSyncedUI) {
+                try {
+                    const savedSettings = JSON.parse(localStorage.getItem('niit_oj_ide_settings') || '{}');
+                    const items = settingPopover.querySelectorAll('.setting-item');
+                    
+                    items.forEach(item => {
+                        const nameEl = item.querySelector('.setting-item-name');
+                        if (!nameEl) return;
+                        const name = nameEl.innerText;
+                        const input = item.querySelector('input');
+                        if (!input) return;
+
+                        if (name.includes('字体') && savedSettings.fontSize) {
+                            input.value = savedSettings.fontSize;
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        else if (name.includes('主题') && savedSettings.theme) {
+                            input.value = savedSettings.theme;
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        else if (name.includes('缩进') && savedSettings.tabLength) {
+                            input.value = savedSettings.tabLength;
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                    });
+                    settingPopover._hasSyncedUI = true;
+                    console.log('[NIIT-OJ-Utils] Settings UI synced');
+                } catch (e) {
+                    console.error('Sync UI failed', e);
+                }
+            }
+        } else {
+            // 弹窗隐藏时重置标志，以便下次打开时再次同步
+            settingPopover._hasSyncedUI = false;
         }
     }
 
     // 定时检查 IDE 是否加载并增强
-    setInterval(enhanceIDE, 1000);
+    setInterval(() => {
+        enhanceIDE();
+        injectSettingsSaveBtn();
+        syncSettingsUI();
+        fixIDESelection();
+    }, 1000);
 })();
