@@ -7,7 +7,21 @@
 
     // 新功能：在新窗口打开讨论
     function handleDiscussionTab() {
-        const tab = document.getElementById('tab-myDiscussion');
+        // 尝试通过 ID 获取 (Element UI tabs 默认 ID 生成规则: tab-{paneName})
+        // 常见的 paneName 可能是 myDiscussion, discussion 等
+        let tab = document.getElementById('tab-myDiscussion') || document.getElementById('tab-discussion');
+        
+        // 如果 ID 没找到，尝试通过内容查找 (Element UI tabs)
+        if (!tab) {
+            const tabs = document.querySelectorAll('.el-tabs__item');
+            for (let i = 0; i < tabs.length; i++) {
+                if (tabs[i].textContent.trim() === '讨论') {
+                    tab = tabs[i];
+                    break;
+                }
+            }
+        }
+
         if (!tab || tab.dataset.hasListener) return;
 
         // 标记已处理
@@ -18,19 +32,29 @@
         // 或者，我们可以使用捕获阶段拦截事件
         
         tab.addEventListener('click', function(e) {
-            // 阻止 Vue 切换 Tab
-            e.stopPropagation();
-            e.preventDefault();
-
             // 获取题目 ID
             const currentUrl = window.location.href;
-            const match = currentUrl.match(/\/problem\/(\d+)/);
+            // 兼容 /problem/1001 和 /training/123/problem/1001
+            // 使用更宽泛的正则匹配 ID (防止非数字 ID)
+            const match = currentUrl.match(/\/problem\/([^\/?#]+)/);
+            
             if (match) {
+                // 只有成功获取 ID 才拦截
+                e.stopPropagation();
+                e.preventDefault();
+                e.stopImmediatePropagation();
+
                 const problemId = match[1];
                 // 构造讨论页 URL
                 const discussionUrl = `https://oj.niit.com.cn/discussion/${problemId}`;
-                window.open(discussionUrl, '_blank');
-                log('Opened discussion in new tab');
+                
+                if (e.ctrlKey || e.metaKey) {
+                    window.open(discussionUrl, '_blank');
+                    log('Opened discussion in new tab: ' + discussionUrl);
+                } else {
+                    window.location.href = discussionUrl;
+                    log('Opened discussion in current tab: ' + discussionUrl);
+                }
             }
         }, true); // 使用捕获阶段，确保先于 Vue 执行
         
@@ -71,7 +95,13 @@
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation(); // 确保阻止其他监听器
-                    window.open(`/submission-detail/${lastId}`, '_blank');
+                    
+                    const url = `/submission-detail/${lastId}`;
+                    if (e.ctrlKey || e.metaKey) {
+                        window.open(url, '_blank');
+                    } else {
+                        window.location.href = url;
+                    }
                 } else {
                     log('No submission ID found in sessionStorage.');
                 }
@@ -109,13 +139,16 @@
                         
                         if (subId) {
                             log('List click detected. Row: ' + rowIndex + ', ID: ' + subId);
-                            // 只有当点击的是可能有交互的元素时才拦截? 
-                            // 或者直接拦截所有行内点击，只要它看起来像是一个链接或按钮
-                            // 用户反馈的是点击按钮报错，所以我们拦截它
                             e.preventDefault();
                             e.stopPropagation();
                             e.stopImmediatePropagation();
-                            window.open(`/submission-detail/${subId}`, '_blank');
+                            
+                            const url = `/submission-detail/${subId}`;
+                            if (e.ctrlKey || e.metaKey) {
+                                window.open(url, '_blank');
+                            } else {
+                                window.location.href = url;
+                            }
                         }
                     }
                 } catch (err) {
@@ -211,10 +244,17 @@
         // 4. 获取当前题目ID
         const currentId = window.location.pathname.split('/').pop();
 
+        // [NEW] 检查是否在训练中
+        let trainingId = null;
+        const trainingMatch = window.location.pathname.match(/\/training\/(\d+)\/problem\//);
+        if (trainingMatch) {
+            trainingId = trainingMatch[1];
+        }
+
         // 2. 检查是否已经渲染且是最新的
         const existingNav = document.getElementById('niit-oj-problem-nav');
         if (existingNav) {
-            if (existingNav.dataset.currentId === currentId) {
+            if (existingNav.dataset.currentId === currentId && existingNav.dataset.trainingId === (trainingId || '')) {
                 return; // 已经渲染且是当前题目
             } else {
                 existingNav.remove(); // 题目变了，移除旧的重新渲染
@@ -222,54 +262,56 @@
         }
 
         // 3. 获取题目列表
-        const listStr = window.sessionStorage.getItem('niit_oj_problem_list');
         let list = [];
         let useVirtualList = false;
+        let listKey = 'niit_oj_problem_list';
+        
+        if (trainingId) {
+            listKey = `niit_oj_training_list_${trainingId}`;
+        }
+
+        const listStr = window.sessionStorage.getItem(listKey);
 
         if (listStr) {
             try {
                 list = JSON.parse(listStr);
-                // 修复BUG 1: 按序号排序
-                list.sort((a, b) => {
-                    const idA = parseInt(a.displayId || a.id);
-                    const idB = parseInt(b.displayId || b.id);
-                    return idA - idB;
-                });
+                // 如果是普通题库，按序号排序
+                if (!trainingId) {
+                    list.sort((a, b) => {
+                        const idA = parseInt(a.displayId || a.id);
+                        const idB = parseInt(b.displayId || b.id);
+                        return idA - idB;
+                    });
+                }
             } catch(e) { 
                 list = []; 
             }
         }
 
-        // 修复BUG 2: 如果没有列表，或者当前题目不在列表中，尝试生成虚拟列表
         // 检查当前题目是否在列表中
         let index = -1;
         if (list.length > 0) {
-            index = list.findIndex(p => String(p.id) === currentId || String(p.displayId) === currentId);
+            // 适配不同的 ID 字段 (id, problemId, displayId)
+            index = list.findIndex(p => {
+                const pid = String(p.problemId || p.id);
+                const disp = String(p.displayId || p.problemDisplayId || '');
+                return pid === currentId || disp === currentId;
+            });
         }
 
-        if (index === -1) {
+        // 如果不在列表中，且不是训练模式，尝试虚拟列表
+        if (index === -1 && !trainingId) {
             // 尝试解析当前ID为数字
             const currentNum = parseInt(currentId);
             if (!isNaN(currentNum)) {
                 useVirtualList = true;
-                // 生成虚拟列表：前2个，当前，后2个
-                // 假设ID是连续的
-                // 检测 padding
                 const isPadded = currentId.length > 1 && currentId.startsWith('0');
                 const paddingLen = currentId.length;
-                
                 const pad = (num) => {
                     if (!isPadded) return String(num);
                     return String(num).padStart(paddingLen, '0');
                 };
-
-                // 生成范围
-                // 修复BUG 1: 第一个序号为0000 (假设最小ID为0)
                 const minId = 0;
-                
-                // 构建虚拟 list
-                // 我们只需要生成 -2 到 +2 的范围
-                // 但是为了复用下面的逻辑，我们构造一个小的 list
                 list = [];
                 for (let i = -2; i <= 2; i++) {
                     const idNum = currentNum + i;
@@ -278,12 +320,10 @@
                         list.push({
                             id: idStr,
                             displayId: idStr,
-                            title: '' // 虚拟列表没有标题
+                            title: '' 
                         });
                     }
                 }
-                
-                // 重新查找 index
                 index = list.findIndex(p => p.id === currentId);
             }
         }
@@ -293,7 +333,8 @@
         // 6. 创建导航容器
         const navDiv = document.createElement('div');
         navDiv.id = 'niit-oj-problem-nav';
-        navDiv.dataset.currentId = currentId; // 标记当前题目ID
+        navDiv.dataset.currentId = currentId; 
+        navDiv.dataset.trainingId = trainingId || '';
         navDiv.style.cssText = `
             display: flex;
             justify-content: center;
@@ -309,7 +350,11 @@
         // 辅助函数：创建按钮
         const createNavBtn = (text, id, isCurrent = false, isArrow = false) => {
             const a = document.createElement('a');
-            a.href = `/problem/${id}`;
+            if (trainingId) {
+                a.href = `/training/${trainingId}/problem/${id}`;
+            } else {
+                a.href = `/problem/${id}`;
+            }
             a.innerText = text;
             a.style.cssText = `
                 margin: 5px;
@@ -341,9 +386,6 @@
         };
 
         // 7. 生成按钮
-        // 如果是虚拟列表，我们已经生成了局部列表，直接全部显示即可 (除了越界的)
-        // 如果是真实列表，显示范围：当前题目 前2个 ~ 后2个
-        
         let start, end;
         if (useVirtualList) {
             start = 0;
@@ -354,14 +396,12 @@
         }
 
         // 上一题箭头
-        // 如果是虚拟列表，只要当前ID > minId，就显示上一题
-        // 如果是真实列表，只要 index > 0
         let showPrev = false;
         let prevId = null;
         
         if (useVirtualList) {
              const currentNum = parseInt(currentId);
-             if (currentNum > 0) { // 假设0是最小
+             if (currentNum > 0) { 
                  const isPadded = currentId.length > 1 && currentId.startsWith('0');
                  const pad = (num) => isPadded ? String(num).padStart(currentId.length, '0') : String(num);
                  showPrev = true;
@@ -370,7 +410,8 @@
         } else {
             if (index > 0) {
                 showPrev = true;
-                prevId = list[index - 1].id;
+                const p = list[index - 1];
+                prevId = p.displayId || p.problemDisplayId || p.problemId || p.id;
             }
         }
 
@@ -381,13 +422,15 @@
         // 中间题目
         for (let i = start; i <= end; i++) {
             const p = list[i];
-            const isCurrent = (p.id === currentId);
-            // 显示 displayId (通常是题号)
-            navDiv.appendChild(createNavBtn(p.displayId, p.id, isCurrent));
+            const pid = String(p.problemId || p.id);
+            const disp = String(p.displayId || p.problemDisplayId || pid);
+            const linkId = disp; 
+            
+            const isCurrent = (pid === currentId || disp === currentId);
+            navDiv.appendChild(createNavBtn(disp, linkId, isCurrent));
         }
 
         // 下一题箭头
-        // 虚拟列表总是显示下一题? 或者我们可以限制最大值? 暂时不限制
         let showNext = false;
         let nextId = null;
 
@@ -400,7 +443,8 @@
         } else {
             if (index < list.length - 1) {
                 showNext = true;
-                nextId = list[index + 1].id;
+                const p = list[index + 1];
+                nextId = p.displayId || p.problemDisplayId || p.problemId || p.id;
             }
         }
 
@@ -409,133 +453,323 @@
         }
 
         // 8. 插入页面
-        // 优化：将题目选择列表放在 .el-card.submit-detail 的最下方
         const container = document.querySelector('.el-card.submit-detail');
         if (container) {
             container.appendChild(navDiv);
             log('Problem navigation rendered in .el-card.submit-detail');
         } else {
-            // Fallback
             const fallback = document.querySelector('.content-app') || document.body;
             fallback.appendChild(navDiv);
             log('Problem navigation rendered in fallback container');
         }
     }
 
-    // 标签点击跳转功能
-    function makeTagsClickable() {
-        // 移除严格的 URL 检查，只要页面上有相关元素就尝试处理
-        // if (!window.location.pathname.includes('/problem')) return;
+    // 强制主导航栏在新标签页打开
+    function makeNavLinksOpenNewTab() {
+        const navMap = {
+            '题目': '/problem',
+            '训练': '/training',
+            '比赛': '/contest',
+            '评测': '/status',
+            '讨论': '/discussion',
+            '关于': '/about' // 假设是 /about，如果不是，点击后会跳转到默认行为
+        };
 
-        // 查找所有可能的标签元素
-        const tags = document.querySelectorAll('.el-tag, .problem-tags .tag');
-        if (tags.length === 0) return;
-
-        const tagMap = JSON.parse(window.sessionStorage.getItem('niit_oj_tag_map') || '{}');
-
-        tags.forEach(tag => {
-            const tagName = tag.textContent.trim();
+        // 选择所有菜单项
+        const items = document.querySelectorAll('.el-menu-item');
+        items.forEach(item => {
+            if (item.dataset.ojNavProcessed) return;
             
-            // 检查是否已经处理过，且内容未变 (防止 Vue 复用 DOM 导致链接错误)
-            if (tag.dataset.ojTagProcessed === 'true' && tag.dataset.ojTagName === tagName) {
-                return;
-            }
+            const text = item.textContent.trim();
+            // 检查是否在映射表中
+            // 注意：有些菜单项包含图标，textContent 会包含图标文本，所以使用 includes 或 trim
+            // 简单处理：遍历 map keys
+            for (const key in navMap) {
+                if (text === key || text.includes(key)) {
+                    // 排除 "我的提交" 等下拉菜单项，只针对主导航
+                    // 主导航通常在 .el-menu--horizontal 下
+                    if (!item.closest('.el-menu--horizontal')) continue;
 
-            // 简单过滤状态标签和功能按钮
-            // 使用正则匹配 "填充用例" 开头的标签
-            if (['Accepted', 'Wrong Answer', 'Time Limit Exceeded', 'Memory Limit Exceeded', 'Runtime Error', 'Compile Error', '在线自测', '运行自测'].includes(tagName) || tagName.startsWith('填充用例')) {
-                tag.setAttribute('data-oj-tag-processed', 'true');
-                tag.setAttribute('data-oj-tag-name', tagName);
-                // 确保没有 tooltip 和 cursor 样式
-                tag.title = '';
-                tag.style.cursor = '';
-                tag.onmouseover = null;
-                tag.onmouseout = null;
-                tag.onclick = null;
-                return;
-            }
-
-            const tagId = tagMap[tagName];
-
-            if (tagId) {
-                tag.setAttribute('data-oj-tag-processed', 'true');
-                tag.setAttribute('data-oj-tag-name', tagName); // 记录当前处理的标签名
-                
-                tag.style.cursor = 'pointer';
-                tag.title = `点击查看 "${tagName}" 标签下的题目`;
-                
-                // 视觉反馈
-                tag.onmouseover = () => { tag.style.textDecoration = 'underline'; };
-                tag.onmouseout = () => { tag.style.textDecoration = 'none'; };
-
-                // 清除旧的事件监听器是不可能的 (匿名函数)，但我们可以通过 cloneNode 来清除
-                // 或者，我们假设 Vue 复用时会重置事件？不一定。
-                // 最稳妥的方法是：如果检测到 DOM 复用 (tagName 变了)，我们需要更新事件。
-                // 由于 addEventListener 无法覆盖，我们使用 onclick 属性，或者在闭包中动态获取 ID？
-                // 为了简单且健壮，我们使用 onclick，这样可以直接覆盖旧的 handler
-                
-                tag.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    window.open(`/problem?tagId=${tagId}`, '_blank');
-                };
-            } else {
-                // 标记为 missing
-                // 如果之前是 true 但现在 ID 没了 (不太可能)，或者之前是 missing
-                tag.setAttribute('data-oj-tag-processed', 'missing');
-                tag.setAttribute('data-oj-tag-name', tagName);
-                tag.title = '未找到标签ID (请先浏览题目列表以捕获标签信息)';
-                tag.style.cursor = 'help';
-                tag.onclick = null; // 清除点击事件
+                    item.setAttribute('data-oj-nav-processed', 'true');
+                    const url = navMap[key];
+                    
+                    // 移除 Vue 的点击事件监听器比较困难，我们使用捕获阶段拦截
+                    item.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        
+                        if (e.ctrlKey || e.metaKey) {
+                            window.open(url, '_blank');
+                        } else {
+                            window.location.href = url;
+                        }
+                    }, true);
+                    
+                    // 添加视觉提示
+                    item.title = "点击跳转，按住 Ctrl 在新标签页打开";
+                    break;
+                }
             }
         });
     }
 
-    // 难度点击跳转功能
-    function makeDifficultyClickable() {
-        // 查找难度标签
-        const levels = document.querySelectorAll('.meta-level:not([data-oj-level-processed])');
-        if (levels.length === 0) return;
+    // 注入自定义 Favicon
+    function injectFavicon() {
+        // 检查是否已有 icon
+        let link = document.querySelector("link[rel~='icon']");
+        if (!link) {
+            link = document.createElement('link');
+            link.rel = 'icon';
+            document.head.appendChild(link);
+        }
+        
+        // 如果是默认的或者空的，替换它
+        // 这里我们简单粗暴一点，直接替换，或者检测是否是 NIIT 的默认 icon
+        // 用户说 "如果这个页面没有图标"，通常是指浏览器 tab 上显示的
+        // 我们可以尝试设置一个
+        if (!link.href || link.href.includes('favicon.ico')) {
+             // 使用扩展图标
+             link.href = chrome.runtime.getURL('icon.png');
+        }
+    }
 
-        const difficultyMap = {
-            '简单': 0,
-            '中等': 1,
-            '困难': 2
-        };
+    // 合并后的标签与难度点击处理函数
+    function processClickableLabels() {
+        const path = window.location.pathname;
 
-        levels.forEach(level => {
-            level.setAttribute('data-oj-level-processed', 'true');
-            const levelName = level.textContent.trim();
-            const difficultyId = difficultyMap[levelName];
+        // --- 1. 训练列表页 (/training) 特殊处理 ---
+        // [Fix] 使用 startsWith 匹配 /training，但排除 /training/{id}/problem
+        // 这样可以匹配 /training, /training/, /training?foo=bar
+        if (path.startsWith('/training') && !path.includes('/problem')) {
+            // [NEW] 硬编码已知分类 ID，解决刷新也找不到的问题
+            const staticCatMap = {
+                '基础算法': 1,
+                '数学问题': 2,
+                '数据结构': 3,
+                '图论': 4,
+                '计算机几何': 5,
+                '算法进阶': 6
+            };
+            const dynamicCatMap = JSON.parse(window.sessionStorage.getItem('niit_oj_training_category_map') || '{}');
+            const catMap = { ...staticCatMap, ...dynamicCatMap };
 
-            if (difficultyId !== undefined) {
-                level.style.cursor = 'pointer';
-                level.title = `点击筛选 "${levelName}" 难度的题目`;
+            const authMap = {
+                '公开训练': 'Public',
+                '私有训练': 'Private', 
+                '密码保护': 'Password' 
+            };
+
+            // [Fix] 允许重新处理 'missing' 状态的元素，以便在数据加载后恢复
+            document.querySelectorAll('.el-tag').forEach(el => {
+                // 如果已经成功处理或者是忽略的，跳过
+                if (el.dataset.ojProcessed === 'true' || el.dataset.ojProcessed === 'ignore') return;
                 
-                // 视觉反馈
-                level.onmouseover = () => { level.style.textDecoration = 'underline'; };
-                level.onmouseout = () => { level.style.textDecoration = 'none'; };
+                const text = el.textContent.trim();
+                if (!text) return;
 
-                level.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    // 保持当前页面的其他参数（如 keyword），只修改 difficulty
-                    // 或者简单点，直接跳转到筛选页
-                    window.location.href = `/problem?difficulty=${difficultyId}`;
-                };
+                // 1.1 权限标签
+                if (authMap[text]) {
+                    enhanceElement(el, 'training-auth', text, authMap[text]);
+                    return;
+                }
+
+                // 1.2 分类标签
+                if (catMap[text]) {
+                    enhanceElement(el, 'training-category', text, catMap[text]);
+                    return;
+                }
+
+                // 1.3 未捕获的分类标签 (看起来像分类，但没有ID)
+                // 只有当它明确是 category-item 或者看起来像标签时
+                if (el.classList.contains('category-item') || el.classList.contains('el-tag')) {
+                     // 排除 "全部" 这种特殊标签
+                     if (text === '全部') {
+                         return;
+                     }
+
+                     // 标记为 missing，但允许下次循环重试 (不设置 ojProcessed=true)
+                     // 只设置一次事件监听器，防止重复绑定
+                     if (el.dataset.ojProcessed !== 'missing') {
+                         el.setAttribute('data-oj-processed', 'missing');
+                         el.style.cursor = 'help';
+                         el.title = '未找到分类ID (请刷新页面以捕获数据)';
+                         el.onclick = (e) => {
+                             e.preventDefault();
+                             e.stopPropagation();
+                             alert(`插件尚未捕获到分类 "${text}" 的ID。\n请尝试刷新页面 (F5)，让插件重新读取训练列表数据。`);
+                         };
+                     }
+                }
+            });
+            return;
+        }
+
+        // --- 2. 题目相关页面 (/problem, /problem/{id}, /training/{id}/problem/{id}) ---
+        const difficultyMap = { '简单': 0, '中等': 1, '困难': 2 };
+        const diffColorMap = { '简单': 'success', '中等': 'warning', '困难': 'danger' };
+        const tagMap = JSON.parse(window.sessionStorage.getItem('niit_oj_tag_map') || '{}');
+        
+        // 1. 处理难度 (Difficulty)
+        // 1.1 .meta-level (通常在题目详情页标题下方)
+        document.querySelectorAll('.meta-level:not([data-oj-processed])').forEach(el => {
+            const text = el.textContent.trim();
+            if (difficultyMap[text] !== undefined) {
+                enhanceElement(el, 'difficulty', text, difficultyMap[text]);
             }
         });
+
+        // 1.2 包含 "难度:" 的 span (旧版或侧边栏)
+        document.querySelectorAll('span:not([data-oj-processed])').forEach(span => {
+            const text = span.textContent.trim();
+            if (text.startsWith('难度:')) {
+                const levelName = text.replace('难度:', '').trim();
+                if (difficultyMap[levelName] !== undefined) {
+                    // 替换为 Tag 样式
+                    const type = diffColorMap[levelName] || 'info';
+                    span.innerHTML = `难度: <span class="el-tag el-tag--small el-tag--${type} el-tag--plain" style="cursor: pointer; margin-left: 2px;">${levelName}</span>`;
+                    const newTag = span.querySelector('.el-tag');
+                    if (newTag) {
+                        enhanceElement(newTag, 'difficulty', levelName, difficultyMap[levelName]);
+                        span.setAttribute('data-oj-processed', 'true');
+                    }
+                }
+            }
+        });
+
+        // 2. 处理标签 (Tags) 和 列表中的难度标签
+        // 查找所有 .el-tag 和 .problem-tags 下的子元素
+        // [Fix] 移除 .problem-tags span 以防止选中非标签元素，移除 missing 状态以支持异步加载
+        const candidates = document.querySelectorAll('.el-tag, .problem-tags .tag');
+        
+        candidates.forEach(el => {
+            if (el.hasAttribute('data-oj-processed')) return;
+
+            const text = el.textContent.trim();
+            if (!text) return;
+            
+            // 2.1 检查是否是难度
+            if (difficultyMap[text] !== undefined) {
+                enhanceElement(el, 'difficulty', text, difficultyMap[text]);
+                return;
+            }
+
+            // 2.2 检查是否是普通标签
+            // 过滤无效标签
+            if (['Accepted', 'Wrong Answer', 'Time Limit Exceeded', 'Memory Limit Exceeded', 'Runtime Error', 'Compile Error', '在线自测', '运行自测', '简单', '中等', '困难'].includes(text) || text.startsWith('填充用例')) {
+                el.setAttribute('data-oj-processed', 'ignore');
+                return;
+            }
+
+            const tagId = tagMap[text];
+            if (tagId) {
+                enhanceElement(el, 'tag', text, tagId);
+            } 
+            // [Fix] 不再标记 missing，因为 tagMap 可能尚未加载完成 (异步竞争)
+            // 下次循环时会再次尝试匹配
+        });
+    }
+
+    function enhanceElement(el, type, name, id) {
+        el.setAttribute('data-oj-processed', 'true');
+        el.style.cursor = 'pointer';
+        
+        const handleJump = (url, e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.ctrlKey || e.metaKey) {
+                window.open(url, '_blank');
+            } else {
+                window.location.href = url;
+            }
+        };
+
+        if (type === 'difficulty') {
+            el.title = `点击筛选 "${name}" 难度的题目 (按住 Ctrl 新标签页打开)`;
+            el.onclick = (e) => handleJump(`/problem?difficulty=${id}`, e);
+        } else if (type === 'tag') {
+            el.title = `点击查看 "${name}" 标签下的题目 (按住 Ctrl 新标签页打开)`;
+            el.onclick = (e) => handleJump(`/problem?tagId=${id}`, e);
+        } else if (type === 'training-auth') {
+            el.title = `点击筛选 "${name}" (按住 Ctrl 新标签页打开)`;
+            el.onclick = (e) => handleJump(`/training?auth=${id}&currentPage=1`, e);
+        } else if (type === 'training-category') {
+            el.title = `点击筛选分类 "${name}" (按住 Ctrl 新标签页打开)`;
+            el.onclick = (e) => handleJump(`/training?categoryId=${id}`, e);
+        }
+        
+        el.onmouseover = () => { el.style.textDecoration = 'underline'; };
+        el.onmouseout = () => { el.style.textDecoration = 'none'; };
+    }
+
+    // 替换 About 页面内容 (局部替换)
+    function replaceAboutPage() {
+        if (window.location.pathname !== '/about') return;
+
+        // 查找 404 错误容器
+        const errorContainer = document.querySelector('.container-error-404');
+        if (!errorContainer) return;
+
+        // 向上查找最近的卡片容器
+        const targetCard = errorContainer.closest('.el-card');
+        if (!targetCard) return;
+
+        // 检查是否已经替换过
+        if (targetCard.dataset.aboutReplaced === 'true') return;
+
+        log('Detected 404 card on /about, injecting plugin intro...');
+        
+        const url = chrome.runtime.getURL('about.html');
+        fetch(url)
+            .then(response => response.text())
+            .then(html => {
+                // 解析 HTML
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                
+                // 1. 注入样式 (如果还没注入过)
+                if (!document.getElementById('niit-oj-about-style')) {
+                    const styles = doc.querySelectorAll('style');
+                    styles.forEach(style => {
+                        style.id = 'niit-oj-about-style';
+                        document.head.appendChild(style);
+                    });
+                }
+
+                // 2. 提取主要内容
+                const container = doc.querySelector('.container');
+                if (container) {
+                    // 调整样式以适应嵌入环境
+                    container.style.boxShadow = 'none';
+                    container.style.margin = '0';
+                    container.style.maxWidth = '100%';
+                    container.style.padding = '0'; // 让外层 el-card 控制 padding
+                    
+                    // 3. 替换卡片内容
+                    targetCard.innerHTML = '';
+                    targetCard.appendChild(container);
+                    targetCard.dataset.aboutReplaced = 'true';
+                    
+                    // 修改页面标题
+                    document.title = 'NIIT OJ Utils - 插件介绍';
+                    
+                    log('About page content injected successfully.');
+                }
+            })
+            .catch(err => console.error('Failed to load about.html', err));
     }
 
     function mainLoop() {
+        replaceAboutPage();
         handleDiscussionTab();
         injectScript();
         fixSubmissionRedirect();
         fixSubmissionListClick();
         fixImages();
         renderProblemNav();
-        makeTagsClickable();
-        makeDifficultyClickable();
+        processClickableLabels();
+        makeNavLinksOpenNewTab();
+        injectFavicon();
     }
 
     // 启动循环检测 (处理 SPA 路由切换)

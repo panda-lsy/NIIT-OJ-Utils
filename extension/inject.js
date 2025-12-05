@@ -93,6 +93,84 @@
                 }
             }
 
+            // 拦截训练题目列表
+            if (this._url && (this._url.includes('training') && (this._url.includes('problem') || this._url.includes('list')))) {
+                 try {
+                    const res = JSON.parse(this.responseText);
+                    // 适配不同的返回结构
+                    const list = res.data.records || res.data.problemList || res.data;
+                    
+                    if (Array.isArray(list)) {
+                         // 尝试从 URL 获取 training_id
+                         let tid = null;
+                         
+                         // 1. 尝试从 Query Param 获取
+                         try {
+                             const urlObj = new URL(this._url, window.location.origin);
+                             tid = urlObj.searchParams.get('training_id') || urlObj.searchParams.get('tid') || urlObj.searchParams.get('id');
+                         } catch(e) {}
+
+                         // 2. 尝试从 URL 路径获取
+                         if (!tid) {
+                             const match = this._url.match(/\/training\/(\d+)/);
+                             if (match) tid = match[1];
+                         }
+
+                         if (tid) {
+                             // 存储训练题目列表
+                             window.sessionStorage.setItem(`niit_oj_training_list_${tid}`, JSON.stringify(list));
+                             // 同时更新最后访问的训练ID
+                             window.sessionStorage.setItem('niit_oj_last_training_id', tid);
+                             console.log(`[NIIT-OJ-Utils] Captured Training List ${tid}:`, list.length);
+                             
+                             // 顺便捕获标签
+                             captureTags(res);
+                         }
+                    }
+                 } catch(e) {
+                     console.error('[NIIT-OJ-Utils] Failed to parse training list', e);
+                 }
+            }
+
+            // 拦截训练列表主页 (Training Main List) - 用于捕获分类ID
+            if (this._url && this._url.includes('/training') && !this._url.includes('/problem')) {
+                 try {
+                    const res = JSON.parse(this.responseText);
+                    const list = res.data.records || res.data.data || res.data;
+                    
+                    if (Array.isArray(list)) {
+                        let catMap = {};
+                        try {
+                            catMap = JSON.parse(window.sessionStorage.getItem('niit_oj_training_category_map') || '{}');
+                        } catch(e) {}
+                        
+                        let updated = false;
+                        list.forEach(item => {
+                            // 捕获 categoryId 和 categoryName
+                            // 1. 直接字段
+                            if (item.categoryId && item.categoryName) {
+                                if (!catMap[item.categoryName]) {
+                                    catMap[item.categoryName] = item.categoryId;
+                                    updated = true;
+                                }
+                            }
+                            // 2. 嵌套对象 (item.category.id)
+                            else if (item.category && item.category.id && item.category.name) {
+                                if (!catMap[item.category.name]) {
+                                    catMap[item.category.name] = item.category.id;
+                                    updated = true;
+                                }
+                            }
+                        });
+                        
+                        if (updated) {
+                            window.sessionStorage.setItem('niit_oj_training_category_map', JSON.stringify(catMap));
+                            console.log('[NIIT-OJ-Utils] Updated Training Category Map');
+                        }
+                    }
+                 } catch(e) {}
+            }
+
             // 拦截提交列表 (submission list)
             if (this._url && (this._url.includes('submission') || this._url.includes('record') || this._url.includes('list'))) {
                 try {
